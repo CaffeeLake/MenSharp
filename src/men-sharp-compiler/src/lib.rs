@@ -28,9 +28,11 @@
 //! assert!(declarations.errors.is_empty());
 //! ```
 
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 
 use men_sharp_asm::AssembleError;
+use men_sharp_codegen::{DumpError, UdonNodes};
 use men_sharp_dotnet::DotNetAssembly;
 use men_sharp_parser::MenSharpAST;
 use men_sharp_semantics::{
@@ -54,6 +56,11 @@ pub struct CompilerSettings {
     /// `COMPILER_UDONSHARP` for foreign (UdonSharp) files, which were written
     /// for that compiler's eyes.
     pub defines: Vec<String>,
+    /// The Udon whitelist to compile against: a dump of the SDK the project
+    /// has installed (the Unity package writes one whenever that SDK
+    /// changes). `None` is the dump embedded in the compiler, which knows
+    /// nothing of a beta SDK's externs.
+    pub udon_nodes: Option<PathBuf>,
 }
 
 /// One input file: a display name (usually the path) and its text.
@@ -98,6 +105,9 @@ pub struct ParsedFile {
 pub struct Compiler {
     settings: CompilerSettings,
     pool: rayon::ThreadPool,
+    /// [`CompilerSettings::udon_nodes`], once read. Shared with the worker
+    /// that reads it ahead of time (see [`Compiler::new`]).
+    project_nodes: Arc<OnceLock<Result<UdonNodes, DumpError>>>,
 }
 
 impl Compiler {
@@ -115,11 +125,38 @@ impl Compiler {
         // The Udon whitelist is parsed on first use, which is inside codegen. With
         // programs generated in parallel that parse would sit on the critical path
         // of whichever program asked first, so it is warmed while the front end runs.
-        pool.spawn(|| {
-            men_sharp_codegen::UdonNodes::for_unity_version(None);
-        });
+        let project_nodes = Arc::new(OnceLock::new());
+        match settings.udon_nodes.clone() {
+            Some(path) => {
+                let project_nodes = Arc::clone(&project_nodes);
+                pool.spawn(move || {
+                    project_nodes.get_or_init(|| load_udon_nodes(&path));
+                });
+            }
+            None => pool.spawn(|| {
+                UdonNodes::for_unity_version(None);
+            }),
+        }
 
-        Ok(Self { settings, pool })
+        Ok(Self {
+            settings,
+            pool,
+            project_nodes,
+        })
+    }
+
+    /// The whitelist programs are generated against: the dump
+    /// [`CompilerSettings::udon_nodes`] names, or the embedded one. A dump
+    /// that cannot be read is an error here, and the caller must see it
+    /// before generating code — [`Compiler::generate_udon`] counts on it.
+    pub fn udon_nodes(&self) -> Result<&UdonNodes, &DumpError> {
+        match &self.settings.udon_nodes {
+            Some(path) => self
+                .project_nodes
+                .get_or_init(|| load_udon_nodes(path))
+                .as_ref(),
+            None => Ok(UdonNodes::for_unity_version(None)),
+        }
     }
 
     pub fn settings(&self) -> &CompilerSettings {
@@ -414,7 +451,9 @@ impl Compiler {
         entry_path: &[&str],
     ) -> men_sharp_codegen::CodegenOutput {
         timescope::scope!("generate program");
-        let nodes = men_sharp_codegen::UdonNodes::for_unity_version(None);
+        let nodes = self
+            .udon_nodes()
+            .unwrap_or_else(|error| panic!("the Udon whitelist was not checked: {error}"));
         men_sharp_codegen::generate(
             declarations,
             signatures,
@@ -575,4 +614,9 @@ pub enum EmitError {
 pub struct UdonBehaviourProgram {
     pub class_path: String,
     pub output: men_sharp_codegen::CodegenOutput,
+}
+
+fn load_udon_nodes(path: &std::path::Path) -> Result<UdonNodes, DumpError> {
+    timescope::scope!("read udon nodes");
+    UdonNodes::load(path)
 }

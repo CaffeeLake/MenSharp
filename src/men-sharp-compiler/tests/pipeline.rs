@@ -52,6 +52,7 @@ fn fingerprint(thread_count: Option<usize>) -> (Vec<String>, Vec<String>) {
     let compiler = Compiler::new(CompilerSettings {
         thread_count,
         defines: Vec::new(),
+        udon_nodes: None,
     })
     .unwrap();
     let files = compiler.parse(sources());
@@ -187,6 +188,7 @@ fn thread_count_setting_is_respected() {
     let compiler = Compiler::new(CompilerSettings {
         thread_count: Some(3),
         defines: Vec::new(),
+        udon_nodes: None,
     })
     .unwrap();
     assert_eq!(compiler.thread_count(), 3);

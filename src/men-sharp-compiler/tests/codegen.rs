@@ -10652,8 +10652,14 @@ fn an_async_method_suspends_and_resumes_where_it_left_off() {
 /// The code generator's error messages for `source`, with the program dump
 /// alongside — for what is rejected there rather than by the checker.
 fn codegen_errors(source: &str) -> Option<(String, Vec<String>)> {
+    codegen_errors_with(source, CompilerSettings::default())
+}
+
+/// [`codegen_errors`] under `settings` (another whitelist, say).
+fn codegen_errors_with(source: &str, settings: CompilerSettings) -> Option<(String, Vec<String>)> {
     let dir = dotnet_shared_dir()?;
-    let compiler = Compiler::new(CompilerSettings::default()).unwrap();
+    let compiler = Compiler::new(settings).unwrap();
+    compiler.udon_nodes().expect("the whitelist reads");
     let bytes = vec![std::fs::read(dir.join("System.Private.CoreLib.dll")).unwrap()];
     let references = compiler.load_references(&bytes).unwrap();
     let mut sources = vec![SourceCode::new("test.cs", source)];
@@ -17127,4 +17133,140 @@ fn udon_members_of_the_base_class_reach_another_behaviours_receiver() {
         meta.contains("VRC.Udon.Common.Enums.EventTiming#1"),
         "{meta}"
     );
+}
+
+/// A project's whitelist (`--udon-nodes`): the embedded dump as a given
+/// SDK would have written it, minus the externs in `drop`, plus `add`.
+fn project_dump(name: &str, sdk: &str, drop: &[&str], add: &[&str]) -> std::path::PathBuf {
+    let embedded = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../data/udon/2022.3.22f1.json"
+    ))
+    .unwrap();
+    let mut out = String::new();
+    for line in embedded.lines() {
+        if drop
+            .iter()
+            .any(|signature| line.contains(&format!("\"fullName\": \"{signature}\"")))
+        {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+        if line.trim_start().starts_with("\"unityVersion\"") {
+            out.push_str(&format!("  \"sdk\": \"{sdk}\",\n"));
+        }
+        if line.trim() == "\"nodes\": [" {
+            for signature in add {
+                out.push_str(&format!(
+                    "    {{\"fullName\": \"{signature}\", \"relatedType\": \"System.Math\", \"parameters\": [{{\"name\": \"value\", \"type\": \"System.Int32\", \"kind\": \"IN\"}}, {{\"name\": \"min\", \"type\": \"System.Int32\", \"kind\": \"IN\"}}, {{\"name\": \"max\", \"type\": \"System.Int32\", \"kind\": \"IN\"}}, {{\"name\": null, \"type\": \"System.Int32\", \"kind\": \"OUT\"}}]}},\n"
+                ));
+            }
+        }
+    }
+    let dir = std::env::temp_dir().join(format!("men-sharp-udon-nodes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{name}.json"));
+    std::fs::write(&path, out).unwrap();
+    path
+}
+
+const CLAMP: &str = "SystemMath.__Clamp__SystemInt32_SystemInt32_SystemInt32__SystemInt32";
+const CLAMP_SOURCE: &str = r#"
+    using System;
+    namespace Game
+    {
+        public class Program
+        {
+            public static int result;
+            public static void Main() { result = Math.Clamp(15, 0, 10); }
+        }
+    }
+"#;
+
+#[test]
+fn an_extern_only_the_projects_sdk_has_compiles_against_its_dump() {
+    // the embedded whitelist (Unity's .NET) has no Math.Clamp
+    let Some((_, errors)) = codegen_errors(CLAMP_SOURCE) else {
+        eprintln!("skipped: no .NET runtime");
+        return;
+    };
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains(CLAMP) && error.contains("not exposed")),
+        "{errors:#?}"
+    );
+
+    // a beta SDK that exposes it: the very same source compiles
+    let path = project_dump("beta", "com.vrchat.worlds 3.99.0-beta.1", &[], &[CLAMP]);
+    let (program, errors) = codegen_errors_with(
+        CLAMP_SOURCE,
+        CompilerSettings {
+            udon_nodes: Some(path),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(errors, Vec::<String>::new());
+    assert!(program.contains(CLAMP), "{program}");
+}
+
+#[test]
+fn an_extern_the_projects_sdk_lacks_names_that_sdk() {
+    // going back from the beta to the live SDK: what only the beta had is
+    // an error at compile time, naming the SDK that was asked
+    let abs = "SystemMath.__Abs__SystemInt32__SystemInt32";
+    let path = project_dump("live", "com.vrchat.worlds 3.10.5", &[abs], &[]);
+    let Some((_, errors)) = codegen_errors_with(
+        r#"
+        using System;
+        namespace Game
+        {
+            public class Program
+            {
+                public static int result;
+                public static void Main() { result = Math.Abs(-3); }
+            }
+        }
+        "#,
+        CompilerSettings {
+            udon_nodes: Some(path),
+            ..Default::default()
+        },
+    ) else {
+        eprintln!("skipped: no .NET runtime");
+        return;
+    };
+    assert!(
+        errors.iter().any(|error| error.contains(abs)
+            && error.contains("in the SDK installed in this project (com.vrchat.worlds 3.10.5)")),
+        "{errors:#?}"
+    );
+}
+
+#[test]
+fn an_unreadable_project_dump_is_reported_before_codegen() {
+    let compiler = Compiler::new(CompilerSettings {
+        udon_nodes: Some("/nonexistent/men-sharp/udon-nodes.json".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    assert!(compiler.udon_nodes().is_err());
+
+    let dir = std::env::temp_dir().join(format!("men-sharp-udon-nodes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let truncated = dir.join("truncated.json");
+    std::fs::write(
+        &truncated,
+        "{\n  \"unityVersion\": \"2022.3.22f1\",\n  \"nodes\": [\n",
+    )
+    .unwrap();
+    let compiler = Compiler::new(CompilerSettings {
+        udon_nodes: Some(truncated),
+        ..Default::default()
+    })
+    .unwrap();
+    let error = compiler.udon_nodes().err().unwrap();
+    assert!(error.offset.is_some(), "{error}");
 }

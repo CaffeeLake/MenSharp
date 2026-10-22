@@ -84,6 +84,32 @@ On the command line, `--error-format rich|short|unity` picks the markup
 captured, Unity's rich text tags for its console) and `NO_COLOR` turns
 colour off.
 
+## Beta and closed-beta SDKs
+
+Which externs a program may call is decided by the VRChat SDK installed in
+the project, not by MenSharp: the first compile after an SDK is installed
+(or updated, or swapped for an open beta, or for a closed-beta build) reads
+that SDK's Udon whitelist and compiles against it, so the externs only that
+SDK has compile like any other. The console says when it happens, and what
+changed since the previous SDK:
+
+```text
+MenSharp: compiling against the Udon whitelist of the installed SDK (com.vrchat.worlds 3.11.0-beta.2): 36214 externs, 214 new and 3 gone since the previous SDK.
+```
+
+Changing the SDK also recompiles every program, so going back from a beta
+to the live SDK reports a call to an extern the live SDK lacks as a compile
+error — naming the SDK it was checked against — instead of letting the
+program halt in VRChat.
+
+The whitelist is kept in `Library/MenSharp/udon-nodes/`, which is not part
+of a project's version control: nothing derived from an SDK you received
+under NDA ends up in your repository. **MenSharp > Regenerate Udon
+Whitelist** reads it again; **MenSharp > Export Udon Whitelist…** saves a
+copy, which the command line takes with `--udon-nodes <file>`. Without one
+(and when the SDK cannot be read, which the console warns about) the
+compiler uses the whitelist it ships with.
+
 ## Events
 
 Method names Udon knows (`Start`, `Update`, `Interact`, `OnPlayerJoined`,

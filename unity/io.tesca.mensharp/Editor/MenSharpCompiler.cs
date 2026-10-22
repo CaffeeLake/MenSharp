@@ -117,7 +117,11 @@ public static class MenSharpCompiler
             return;
         }
 
-        string signature = SourceSignature(set, binary);
+        // the whitelist of the SDK installed here (made once per SDK); null
+        // leaves the compiler with the one it embeds
+        string udonNodes = MenSharpUdonNodes.EnsureDump();
+
+        string signature = SourceSignature(set, binary, udonNodes);
         if (onlyIfChanged && !force && signature == LastSignature())
         {
             return;
@@ -131,7 +135,8 @@ public static class MenSharpCompiler
         }
 
         var stopwatch = Stopwatch.StartNew();
-        bool compiled = RunCompiler(binary, outputDirectory, set.MenSharp.ToArray(), set.Library);
+        bool compiled = RunCompiler(
+            binary, outputDirectory, set.MenSharp.ToArray(), set.Library, udonNodes);
         // remembered whether it compiled or not: the errors were reported
         // once, and the next edit changes the signature anyway
         RememberSignature(signature);
@@ -257,15 +262,19 @@ public static class MenSharpCompiler
         EditorApplication.delayCall += () => Compile(force, onlyIfChanged);
     }
 
-    /// Every source path with its last-write time, plus the compiler's — the
-    /// inputs of a compile, hashed. Equal signatures mean the same programs.
-    private static string SourceSignature(MenSharpSources.SourceSet set, string binary)
+    /// Every source path with its last-write time, plus the compiler's and
+    /// the whitelist's — the inputs of a compile, hashed. Equal signatures
+    /// mean the same programs. The whitelist is named after the SDK it came
+    /// from, so installing another SDK compiles everything again.
+    private static string SourceSignature(
+        MenSharpSources.SourceSet set, string binary, string udonNodes)
     {
         var text = new StringBuilder();
         var paths = new List<string>(set.MenSharp);
         paths.AddRange(set.Library);
         paths.Sort(StringComparer.Ordinal);
         paths.Add(binary);
+        paths.Add(udonNodes ?? "(embedded udon nodes)");
         foreach (string path in paths)
         {
             text.Append(path).Append('\t');
@@ -382,9 +391,15 @@ public static class MenSharpCompiler
     }
 
     private static bool RunCompiler(
-        string binary, string outputDirectory, string[] sources, List<string> foreign)
+        string binary, string outputDirectory, string[] sources, List<string> foreign,
+        string udonNodes)
     {
         var arguments = new List<string>();
+        if (udonNodes != null)
+        {
+            arguments.Add("--udon-nodes");
+            arguments.Add(Path.GetFullPath(udonNodes));
+        }
         foreach (string reference in ReferenceAssemblies())
         {
             arguments.Add("--reference");

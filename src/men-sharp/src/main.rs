@@ -31,11 +31,13 @@ use men_sharp_semantics::{
 use report::Files;
 
 const USAGE: &str = "usage: men-sharp [--threads N] [--reference lib.dll]... \
-[--udonsharp other.cs]... [--define NAME]... [--profile-dir dir] \
+[--udonsharp other.cs]... [--define NAME]... [--udon-nodes dump.json] [--profile-dir dir] \
 [--emit-udon Namespace.EntryClass --out name | --emit-udon-all --out-dir dir] \
 [--lang auto|en|ja] [--error-format rich|short|unity] [@arguments.rsp]... <file.cs>...
   @file reads more arguments from a response file, one per line \
-(a project's worth of paths outgrows a Windows command line)";
+(a project's worth of paths outgrows a Windows command line)
+  --udon-nodes compiles against the Udon whitelist of an installed SDK \
+(MenSharp > Dump Udon Node Definitions) instead of the embedded one";
 
 fn main() -> ExitCode {
     crash::install();
@@ -117,6 +119,7 @@ fn run() -> ExitCode {
     let mut foreign_paths = Vec::new();
     let mut defines = Vec::new();
     let mut reference_paths = Vec::new();
+    let mut udon_nodes = None;
     let mut udon_entry: Option<String> = None;
     let mut udon_all = false;
     let mut out_name = "program".to_string();
@@ -157,6 +160,15 @@ fn run() -> ExitCode {
                     return ExitCode::FAILURE;
                 };
                 foreign_paths.push(path);
+            }
+            // the whitelist of the SDK the project has installed, which may
+            // know externs the embedded dump does not (a beta SDK)
+            "--udon-nodes" => {
+                let Some(path) = arguments.next() else {
+                    eprintln!("--udon-nodes needs a dump (.json) path");
+                    return ExitCode::FAILURE;
+                };
+                udon_nodes = Some(std::path::PathBuf::from(path));
             }
             "--define" | "-d" => {
                 let Some(name) = arguments.next() else {
@@ -262,6 +274,7 @@ fn run() -> ExitCode {
     let compiler = match Compiler::new(CompilerSettings {
         thread_count,
         defines,
+        udon_nodes,
     }) {
         Ok(compiler) => compiler,
         Err(error) => {
@@ -307,6 +320,18 @@ fn run() -> ExitCode {
         eprint!("{}", reporter.render(&mut diagnostics));
     }
     println!("checked {} expressions", bodies.expression_types.len());
+
+    if (udon_entry.is_some() || udon_all)
+        && let Err(error) = compiler.udon_nodes()
+    {
+        let path = compiler
+            .settings()
+            .udon_nodes
+            .as_ref()
+            .expect("only a dump fails");
+        eprintln!("{}: not a usable Udon node dump: {error}", path.display());
+        return ExitCode::FAILURE;
+    }
 
     if udon_all {
         if error_count > 0 {

@@ -4299,12 +4299,17 @@ impl<'a, 'ast> Generator<'a, 'ast> {
         self.emit_source_mark(ctx, &span);
         match self.nodes.extern_node(signature) {
             None => {
-                self.error(
-                    ctx,
-                    Message::key("codegen.signature_is_not_exposed_by_udon")
+                // with the project's own dump, name the SDK it came from: an
+                // extern that only a beta SDK has is the likely story, and
+                // which SDK was asked is what tells
+                let message = match &self.nodes.sdk {
+                    Some(sdk) => Message::key("codegen.signature_is_not_exposed_by_sdk")
+                        .arg("signature", signature)
+                        .arg("sdk", sdk),
+                    None => Message::key("codegen.signature_is_not_exposed_by_udon")
                         .arg("signature", signature),
-                    span,
-                );
+                };
+                self.error(ctx, message, span);
             }
             Some(node) if node.parameters.len() != arguments.len() => {
                 self.error(

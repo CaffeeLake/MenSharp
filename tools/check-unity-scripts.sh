@@ -49,6 +49,7 @@ for assembly in \
     "$worlds/Runtime/Udon/External/VRC.Udon.ClientBindings.dll" \
     "$worlds/Editor/Udon/External/VRC.Udon.EditorBindings.dll" \
     "$worlds/Editor/Udon/External/VRC.Udon.UAssembly.dll" \
+    "$worlds/Editor/Udon/External/VRC.Udon.Graph.dll" \
     "$worlds/Runtime/VRCSDK/Plugins/VRCSDK3.dll" \
     "$base/Runtime/VRCSDK/Plugins/VRCSDKBase.dll" \
     "$base/Runtime/VRCSDK/Dependencies/Managed/System.Collections.Immutable.dll"

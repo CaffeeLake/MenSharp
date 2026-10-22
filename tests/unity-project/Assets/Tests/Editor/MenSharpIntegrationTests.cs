@@ -701,6 +701,42 @@ public class MenSharpIntegrationTests
         Assert.AreEqual(0, rates["Hit"]);
     }
 
+    /// The compiler is handed the Udon whitelist of the SDK installed here
+    /// (what makes a beta SDK's externs compile): dumped once per SDK into
+    /// Library/, named after the SDK's fingerprint, reused until that
+    /// changes — and the whole fixture set compiles against it.
+    [Test]
+    public void TheInstalledSdksWhitelistIsDumpedOnceAndHandedToTheCompiler()
+    {
+        string path = MenSharpUdonNodes.EnsureDump();
+        Assert.IsNotNull(path, "the installed SDK can be dumped");
+        StringAssert.StartsWith("Library/MenSharp/udon-nodes/", path);
+        StringAssert.Contains(MenSharpUdonNodes.Fingerprint(), path);
+        string dump = System.IO.File.ReadAllText(path);
+        StringAssert.Contains("\"sdk\": \"com.vrchat.worlds ", dump);
+        StringAssert.Contains(
+            "\"fullName\": \"UnityEngineDebug.__Log__SystemObject__SystemVoid\"", dump);
+
+        DateTime written = System.IO.File.GetLastWriteTimeUtc(path);
+        Assert.AreEqual(path, MenSharpUdonNodes.EnsureDump(), "the same SDK, the same dump");
+        Assert.AreEqual(written, System.IO.File.GetLastWriteTimeUtc(path), "and it is not rewritten");
+
+        MenSharpCompiler.CompileAll();
+        AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+        string[] arguments = System.IO.File.ReadAllLines(
+            System.IO.Path.Combine("Library", "MenSharp", "compiler.rsp"));
+        int flag = Array.IndexOf(arguments, "--udon-nodes");
+        Assert.GreaterOrEqual(flag, 0, "the compiler is given the dump");
+        Assert.AreEqual(System.IO.Path.GetFullPath(path), arguments[flag + 1]);
+        Assert.IsNotNull(MenSharpSources.FindProgram("MenSharpRuntimeSmoke"), "and compiles with it");
+
+        // a dump that went missing is made again, not silently skipped
+        System.IO.File.Delete(path);
+        Assert.AreEqual(path, MenSharpUdonNodes.EnsureDump());
+        Assert.IsTrue(System.IO.File.Exists(path));
+        Assert.IsFalse(System.IO.File.Exists(path + ".partial"), "no half-written dump is left");
+    }
+
     /// A program asset counts as up to date only while its stored program
     /// was built from the current inputs by this package: a build record
     /// that is missing or different — a store the SDK skipped during play
